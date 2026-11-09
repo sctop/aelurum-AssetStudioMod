@@ -2,56 +2,83 @@ name: AssetStudioBuild
 
 on:
   push:
-    branches: [ master ]
+    branches: [ AssetStudioMod, master ]
   pull_request:
-    branches: [ master ]
+    branches: [ AssetStudioMod, master ]
 
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FBX_SDK_URL: "https://damassets.autodesk.net/content/dam/autodesk/www/adn/fbx/2020-2-1/fbx202021_fbxsdk_vs2019_win.exe"
 
 jobs:
   build:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v2
-      - uses: microsoft/setup-msbuild@v1.1
-      
-      - name: Download FBX SDK
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Setup .NET 9 & 10 SDKs
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      - name: Install FBX SDK 2020.2.1
         run: |
-          md fbx
-          cd fbx
-          Invoke-WebRequest "https://damassets.autodesk.net/content/dam/autodesk/www/adn/fbx/2020-2-1/fbx202021_fbxsdk_vs2019_win.exe" -OutFile "fbxsdk.exe"
-          Start-Process -FilePath "fbxsdk.exe" /S -Wait
-          Invoke-WebRequest "https://damassets.autodesk.net/content/dam/autodesk/www/adn/fbx/2020-2-1/fbx202021_fbxsdk_vs2019_pdbs.exe" -OutFile "fbxpdb.exe"
-          Start-Process -FilePath "fbxpdb.exe" /S -Wait
-          cd ..
+          Invoke-WebRequest "$env:FBX_SDK_URL" -OutFile "$env:RUNNER_TEMP\fbxsdk.exe"
+          Start-Process -FilePath "$env:RUNNER_TEMP\fbxsdk.exe" -ArgumentList "/S" -Wait
+          if (-not (Test-Path "C:\Program Files\Autodesk\FBX\FBX SDK\2020.2.1\include")) {
+            throw "FBX SDK installation failed"
+          }
 
-      - name: Nuget Restore
-        run: nuget restore
-      
-      - name: Build .Net472
-        run: msbuild /p:Configuration=Release /p:TargetFramework=net472 /verbosity:minimal
+      - name: Build AssetStudioFBXNative (Release x64)
+        run: msbuild AssetStudioFBXNative\AssetStudioFBXNative.vcxproj /p:Configuration=Release /p:Platform=x64 /m /nologo /verbosity:minimal
 
-      - name: Build .Net5
-        run: msbuild /t:AssetStudioGUI:publish /p:Configuration=Release /p:TargetFramework=net5.0-windows /p:SelfContained=false /verbosity:minimal
+      - name: Build Texture2DDecoderNative (Release x64)
+        run: msbuild Texture2DDecoderNative\Texture2DDecoderNative.vcxproj /p:Configuration=Release /p:Platform=x64 /m /nologo /verbosity:minimal
 
-      - name: Build .Net6
-        run: msbuild /t:AssetStudioGUI:publish /p:Configuration=Release /p:TargetFramework=net6.0-windows /p:SelfContained=false /verbosity:minimal
+      - name: Publish GUI (net9.0, win-x64)
+        run: dotnet publish AssetStudioGUI\AssetStudioGUI.csproj -c Release -f net9.0-windows -r win-x64 --self-contained false -p:SolutionDir="$env:GITHUB_WORKSPACE/"
 
-      - name: Upload .Net472 Artifact
-        uses: actions/upload-artifact@v2
+      - name: Publish GUI (net10.0, win-x64)
+        run: dotnet publish AssetStudioGUI\AssetStudioGUI.csproj -c Release -f net10.0-windows -r win-x64 --self-contained false -p:SolutionDir="$env:GITHUB_WORKSPACE/"
+
+      - name: Publish CLI (net9.0, win-x64)
+        run: dotnet publish AssetStudioCLI\AssetStudioCLI.csproj -c Release -f net9.0 -r win-x64 --self-contained false -p:SolutionDir="$env:GITHUB_WORKSPACE/"
+
+      - name: Publish CLI (net10.0, win-x64)
+        run: dotnet publish AssetStudioCLI\AssetStudioCLI.csproj -c Release -f net10.0 -r win-x64 --self-contained false -p:SolutionDir="$env:GITHUB_WORKSPACE/"
+
+      - name: Upload GUI net9 artifact
+        uses: actions/upload-artifact@v7
         with:
-          name: AssetStudio.net472
-          path: AssetStudioGUI/bin/Release/net472
+          name: AssetStudioModGUI.net9.win64
+          path: AssetStudioGUI/bin/Release/net9.0-windows/win-x64/publish
 
-      - name: Upload .Net5 Artifact
-        uses: actions/upload-artifact@v2
+      - name: Upload GUI net10 artifact
+        uses: actions/upload-artifact@v7
         with:
-          name: AssetStudio.net5
-          path: AssetStudioGUI/bin/Release/net5.0-windows/publish
+          name: AssetStudioModGUI.net10.win64
+          path: AssetStudioGUI/bin/Release/net10.0-windows/win-x64/publish
 
-      - name: Upload .Net6 Artifact
-        uses: actions/upload-artifact@v2
+      - name: Upload CLI net9 artifact
+        uses: actions/upload-artifact@v7
         with:
-          name: AssetStudio.net6
-          path: AssetStudioGUI/bin/Release/net6.0-windows/publish
+          name: AssetStudioModCLI.net9.win64
+          path: AssetStudioCLI/bin/Release/net9.0/win-x64/publish
+
+      - name: Upload CLI net10 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: AssetStudioModCLI.net10.win64
+          path: AssetStudioCLI/bin/Release/net10.0/win-x64/publish
